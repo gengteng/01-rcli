@@ -1,6 +1,6 @@
 use crate::{
-    get_content, get_reader, process_text_key_generate, process_text_sign, process_text_verify,
-    CmdExector,
+    get_content, get_reader, process_text_decrypt, process_text_encrypt, process_text_key_generate,
+    process_text_sign, process_text_verify, CmdExector,
 };
 
 use super::{verify_file, verify_path};
@@ -19,6 +19,10 @@ pub enum TextSubCommand {
     Verify(TextVerifyOpts),
     #[command(about = "Generate a random blake3 key or ed25519 key pair")]
     Generate(KeyGenerateOpts),
+    #[command(about = "Encrypt a text with a key and return the ciphertext")]
+    Encrypt(TextEncryptOpts),
+    #[command(about = "Decrypt a text with a key and return the plaintext")]
+    Decrypt(TextDecryptOpts),
 }
 
 #[derive(Debug, Parser)]
@@ -28,7 +32,7 @@ pub struct TextSignOpts {
     #[arg(short, long, value_parser = verify_file)]
     pub key: String,
     #[arg(long, default_value = "blake3", value_parser = parse_text_sign_format)]
-    pub format: TextSignFormat,
+    pub format: Algorithm,
 }
 
 #[derive(Debug, Parser)]
@@ -40,49 +44,72 @@ pub struct TextVerifyOpts {
     #[arg(long)]
     pub sig: String,
     #[arg(long, default_value = "blake3", value_parser = parse_text_sign_format)]
-    pub format: TextSignFormat,
+    pub format: Algorithm,
 }
 
 #[derive(Debug, Parser)]
 pub struct KeyGenerateOpts {
     #[arg(long, default_value = "blake3", value_parser = parse_text_sign_format)]
-    pub format: TextSignFormat,
+    pub format: Algorithm,
     #[arg(short, long, value_parser = verify_path)]
     pub output_path: PathBuf,
 }
 
-#[derive(Debug, Clone, Copy)]
-pub enum TextSignFormat {
-    Blake3,
-    Ed25519,
+#[derive(Debug, Parser)]
+pub struct TextEncryptOpts {
+    /// The plaintext to encrypt.
+    #[arg(short, long, value_parser = verify_file, default_value = "-")]
+    pub input: String,
+    /// The key to encrypt with.
+    #[arg(short, long)]
+    pub key: String,
 }
 
-fn parse_text_sign_format(format: &str) -> Result<TextSignFormat, anyhow::Error> {
+#[derive(Debug, Parser)]
+pub struct TextDecryptOpts {
+    /// The ciphertext to decrypt.
+    #[arg(short, long, value_parser = verify_file, default_value = "-")]
+    pub input: String,
+    /// The key to decrypt with.
+    #[arg(short, long)]
+    pub key: String,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum Algorithm {
+    Blake3,
+    Ed25519,
+    ChaCha20Poly1305,
+}
+
+fn parse_text_sign_format(format: &str) -> Result<Algorithm, anyhow::Error> {
     format.parse()
 }
 
-impl FromStr for TextSignFormat {
+impl FromStr for Algorithm {
     type Err = anyhow::Error;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
-            "blake3" => Ok(TextSignFormat::Blake3),
-            "ed25519" => Ok(TextSignFormat::Ed25519),
+            "blake3" => Ok(Algorithm::Blake3),
+            "ed25519" => Ok(Algorithm::Ed25519),
+            "chacha20poly1305" => Ok(Algorithm::ChaCha20Poly1305),
             _ => Err(anyhow::anyhow!("Invalid format")),
         }
     }
 }
 
-impl From<TextSignFormat> for &'static str {
-    fn from(format: TextSignFormat) -> Self {
+impl From<Algorithm> for &'static str {
+    fn from(format: Algorithm) -> Self {
         match format {
-            TextSignFormat::Blake3 => "blake3",
-            TextSignFormat::Ed25519 => "ed25519",
+            Algorithm::Blake3 => "blake3",
+            Algorithm::Ed25519 => "ed25519",
+            Algorithm::ChaCha20Poly1305 => "chacha20poly1305",
         }
     }
 }
 
-impl fmt::Display for TextSignFormat {
+impl fmt::Display for Algorithm {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", Into::<&str>::into(*self))
     }
@@ -121,6 +148,28 @@ impl CmdExector for KeyGenerateOpts {
         for (k, v) in key {
             fs::write(self.output_path.join(k), v).await?;
         }
+        Ok(())
+    }
+}
+
+impl CmdExector for TextEncryptOpts {
+    async fn execute(self) -> anyhow::Result<()> {
+        let TextEncryptOpts { input, key } = self;
+        let mut reader = get_reader(&input)?;
+        let key = get_content(&key)?;
+        let encrypted = process_text_encrypt(&mut reader, key.as_slice())?;
+        println!("{encrypted}");
+        Ok(())
+    }
+}
+
+impl CmdExector for TextDecryptOpts {
+    async fn execute(self) -> anyhow::Result<()> {
+        let TextDecryptOpts { input, key } = self;
+        let mut reader = get_reader(&input)?;
+        let key = get_content(&key)?;
+        let decrypted = process_text_decrypt(&mut reader, key.as_slice())?;
+        println!("{decrypted}");
         Ok(())
     }
 }
